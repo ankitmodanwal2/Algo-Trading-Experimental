@@ -1,5 +1,9 @@
 package com.myorg.trading.security;
 
+import com.myorg.trading.security.dto.LoginRequest;
+import com.myorg.trading.security.dto.LoginResponse;
+import com.myorg.trading.security.dto.RegisterRequest;
+
 import com.myorg.trading.domain.entity.User;
 import com.myorg.trading.domain.repository.UserRepository;
 import jakarta.validation.Valid;

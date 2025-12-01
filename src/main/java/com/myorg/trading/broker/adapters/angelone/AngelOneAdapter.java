@@ -3,10 +3,10 @@ package com.myorg.trading.broker.adapters.angelone;
 import com.myorg.trading.broker.api.*;
 import com.myorg.trading.config.properties.AngelOneProperties;
 import com.myorg.trading.broker.token.TokenStore;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.http.HttpHeaders;
+import org.springframework.web.reactive.function.client.ClientResponse;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Flux;
 
@@ -15,11 +15,10 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Angel One SmartAPI adapter (skeleton).
- * Angel uses session tokens + refresh flows; refer to their SmartAPI docs for exact fields.
+ * Angel One SmartAPI adapter (account-aware).
+ * Note: this is a skeleton — adjust paths/fields to match SmartAPI docs.
  */
-@Component
-@Qualifier("angelone")
+@Component("angelone")
 public class AngelOneAdapter implements BrokerClient {
 
     private final WebClient webClient;
@@ -41,10 +40,14 @@ public class AngelOneAdapter implements BrokerClient {
         return Set.of(BrokerCapability.PLACE_ORDER, BrokerCapability.CANCEL_ORDER, BrokerCapability.MARKET_DATA_STREAM);
     }
 
+    /**
+     * Ensure a valid token for given accountId. Uses TokenStore to load & persist tokens.
+     */
     private Mono<AngelAuthResponse> authenticateAccount(String accountId) {
         return tokenStore.getToken(accountId)
                 .flatMap(t -> {
-                    if (t == null || t.isExpired()) {
+                    // t exists here; check expiry
+                    if (t.isExpired()) {
                         return requestNewToken(accountId);
                     }
                     return Mono.just(t);
@@ -52,26 +55,41 @@ public class AngelOneAdapter implements BrokerClient {
                 .switchIfEmpty(requestNewToken(accountId));
     }
 
+    /**
+     * Request a new token (account-scoped). NOTE: for many brokers you must use per-account stored credentials
+     * (API key/secret) and not global client credentials. Adjust this method to read those from BrokerAccountService.
+     */
     private Mono<AngelAuthResponse> requestNewToken(String accountId) {
-        Map<String, Object> body = Map.of("client_id", props.getClientId(), "client_secret", props.getClientSecret());
+        Map<String, Object> body = Map.of(
+                "client_id", props.getClientId(),
+                "client_secret", props.getClientSecret()
+        );
+
         return webClient.post()
                 .uri(props.getAuthPath())
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(AngelAuthResponse.class)
-                .flatMap(r -> tokenStore.saveToken(accountId, r).thenReturn(r));
+                .flatMap(r -> {
+                    // mark obtained time so isExpired() works
+                    r.markObtainedNow();
+                    return tokenStore.saveToken(accountId, r).thenReturn(r);
+                });
     }
+
+    // ----------------- BrokerClient implementations (account-aware) -----------------
 
     @Override
     public Mono<BrokerAuthToken> authenticateIfNeeded() {
+        // backward-compatible default (not account-scoped)
         return requestNewToken("default")
                 .map(r -> new BrokerAuthToken(r.getAccessToken(), r.getRefreshToken(), r.getTokenType(),
-                        Instant.now().plusSeconds(r.getExpiresIn())));
+                        Instant.now().plusSeconds(r.getExpiresIn() == null ? 0 : r.getExpiresIn())));
     }
 
     @Override
-    public Mono<BrokerOrderResponse> placeOrder(BrokerOrderRequest req) {
-        return authenticateIfNeeded()
+    public Mono<BrokerOrderResponse> placeOrder(String accountId, BrokerOrderRequest req) {
+        return authenticateAccount(accountId)
                 .flatMap(auth -> webClient.post()
                         .uri(props.getPlaceOrderPath())
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + auth.getAccessToken())
@@ -83,10 +101,11 @@ public class AngelOneAdapter implements BrokerClient {
     }
 
     @Override
-    public Mono<BrokerOrderStatus> getOrderStatus(String brokerOrderId) {
-        return authenticateIfNeeded()
+    public Mono<BrokerOrderStatus> getOrderStatus(String accountId, String brokerOrderId) {
+        return authenticateAccount(accountId)
                 .flatMap(auth -> webClient.get()
-                        .uri(uriBuilder -> uriBuilder.path(props.getOrderStatusPath()).queryParam("order_id", brokerOrderId).build())
+                        .uri(uriBuilder -> uriBuilder.path(props.getOrderStatusPath())
+                                .queryParam("order_id", brokerOrderId).build())
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + auth.getAccessToken())
                         .retrieve()
                         .bodyToMono(AngelOrderStatusResponse.class)
@@ -95,20 +114,29 @@ public class AngelOneAdapter implements BrokerClient {
     }
 
     @Override
-    public Mono<Void> cancelOrder(String brokerOrderId) {
-        return authenticateIfNeeded()
+    public Mono<Void> cancelOrder(String accountId, String brokerOrderId) {
+        return authenticateAccount(accountId)
                 .flatMap(auth -> webClient.post()
                         .uri(props.getCancelOrderPath())
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + auth.getAccessToken())
                         .bodyValue(Map.of("order_id", brokerOrderId))
-                        .retrieve()
-                        .bodyToMono(Void.class)
+                        .exchangeToMono(response -> handleVoidResponse(response))
                 );
+    }
+
+    /**
+     * Handle responses for void endpoints: return empty on 2xx, otherwise create an error.
+     */
+    private Mono<Void> handleVoidResponse(ClientResponse resp) {
+        if (resp.statusCode().is2xxSuccessful()) {
+            return Mono.empty();
+        }
+        return resp.createException().flatMap(Mono::error);
     }
 
     @Override
     public Flux<MarketDataTick> marketDataStream(String instrumentToken) {
-        // Build WebSocket client to angelone market feed or use broker-provided streaming SDK.
+        // TODO: implement streaming (WebSocket / SSE) according to AngelOne's streaming API.
         return Flux.empty();
     }
 
@@ -137,5 +165,5 @@ public class AngelOneAdapter implements BrokerClient {
         return st;
     }
 
-    // Create DTOs AngelAuthResponse, AngelOrderResponse, AngelOrderStatusResponse according to SmartAPI docs.
+    // NOTE: you must ensure AngelAuthResponse has markObtainedNow() and isExpired() helpers.
 }

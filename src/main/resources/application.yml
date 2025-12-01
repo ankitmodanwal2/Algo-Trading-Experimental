@@ -8,6 +8,11 @@ spring:
     password: Esoft@1234
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 6
+
   jpa:
     hibernate:
       ddl-auto: update
@@ -16,15 +21,25 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
 
-  # Quartz scheduler configuration
+  # Quartz must be directly under the top-level spring (NOT nested under another "spring:")
   quartz:
     job-store-type: jdbc
     properties:
       org.quartz.jobStore.class: org.quartz.impl.jdbcjobstore.JobStoreTX
       org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.StdJDBCDelegate
       org.quartz.jobStore.tablePrefix: QRTZ_
+      # use the Spring Boot primary DataSource (logical name "default")
+      org.quartz.jobStore.dataSource: default
+
+      # tell Quartz that the named datasource "default" is provided by Spring
+      org.quartz.dataSource.default.provider: spring
+      org.quartz.dataSource.default.maxConnections: 10
+
       org.quartz.jobStore.isClustered: true
-      org.quartz.scheduler.instanceId: AUTO
+      org.quartz.jobStore.clusterCheckinInterval: 5000
+
+      org.quartz.threadPool.threadCount: 10
+      org.quartz.threadPool.threadPriority: 5
 
 # -------- Broker Configurations ---------
 
