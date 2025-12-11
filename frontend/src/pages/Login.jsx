@@ -1,4 +1,4 @@
-import React, { useState } from 'react'; // ❌ REMOVED useEffect
+import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useNavigate } from 'react-router-dom';
 import useAuthStore from '../store/useAuthStore';
@@ -11,24 +11,39 @@ const Login = () => {
     const navigate = useNavigate();
     const [isLoading, setIsLoading] = useState(false);
 
-    // ✅ REMOVED: The useEffect that was clearing token on mount
-
     const onSubmit = async (data) => {
         setIsLoading(true);
-        const success = await login(data.username, data.password);
 
-        if (success) {
-            toast.success('Access Granted', {
-                style: { background: '#10b981', color: '#fff' },
-            });
-            // Small delay to ensure storage writes
-            setTimeout(() => navigate('/'), 100);
-        } else {
-            toast.error('Invalid Credentials', {
-                style: { background: '#ef4444', color: '#fff' },
-            });
+        try {
+            const success = await login(data.username, data.password);
+
+            if (success) {
+                toast.success('Access Granted', {
+                    style: { background: '#10b981', color: '#fff' },
+                });
+
+                // ✅ FIX: Force synchronous check before navigation
+                await new Promise(resolve => setTimeout(resolve, 150));
+
+                // Double-check token is present before navigating
+                const token = localStorage.getItem('authToken');
+                if (token) {
+                    navigate('/', { replace: true });
+                } else {
+                    console.error('Token not found after login!');
+                    toast.error('Login failed - please try again');
+                }
+            } else {
+                toast.error('Invalid Credentials', {
+                    style: { background: '#ef4444', color: '#fff' },
+                });
+            }
+        } catch (error) {
+            console.error('Login error:', error);
+            toast.error('Login failed - please try again');
+        } finally {
+            setIsLoading(false);
         }
-        setIsLoading(false);
     };
 
     return (
