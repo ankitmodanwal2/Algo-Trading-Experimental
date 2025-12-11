@@ -8,57 +8,52 @@ const api = axios.create({
     },
 });
 
-// Request Interceptor
+// ===== REQUEST INTERCEPTOR =====
 api.interceptors.request.use((config) => {
     const token = localStorage.getItem('authToken');
 
-    // List of endpoints that don't require auth
+    // Public endpoints that don't need authentication
     const publicEndpoints = ['/auth/login', '/auth/register'];
     const isPublic = publicEndpoints.some(endpoint => config.url.includes(endpoint));
 
+    // Add token if available
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
-    } else if (!isPublic) {
-        // CRITICAL FIX: If no token and not a public endpoint, CANCEL the request.
-        // This prevents the 401 error from the server and stops the login loop.
-        console.warn(`[API] Blocked request to ${config.url} because no token was found.`);
-        const controller = new AbortController();
-        config.signal = controller.signal;
-        controller.abort("No Auth Token"); // Cancel request
-        return Promise.reject(new axios.Cancel("No Auth Token"));
     }
+
+    // ✅ FIX: Don't block non-public requests without token
+    // Let the backend return 401, which we handle in response interceptor
 
     return config;
 }, (error) => {
     return Promise.reject(error);
 });
 
-// Response Interceptor
+// ===== RESPONSE INTERCEPTOR =====
 api.interceptors.response.use(
     (response) => response,
     (error) => {
-        // Ignore cancellations (caused by our logic above)
+        // Ignore cancelled requests (from our abort logic)
         if (axios.isCancel(error)) {
-            return new Promise(() => {}); // Return pending promise to swallow error
+            return new Promise(() => {}); // Swallow the error
         }
 
         const status = error.response?.status;
 
         if (status === 401) {
-            console.error("Session expired or invalid token.");
-
-            // Only redirect if we are NOT already on the login page
+            // ✅ Only redirect if NOT already on login page
             if (!window.location.pathname.includes('/login')) {
-                // Optional: Clear token only if you are sure
-                // localStorage.removeItem('authToken');
+                console.error("Session expired or invalid token.");
+                localStorage.removeItem('authToken');
                 toast.error("Session expired. Please login again.");
 
-                // Allow user to read the toast before redirecting (2 seconds)
+                // Delay redirect to let user read the toast
                 setTimeout(() => {
                     window.location.href = '/login';
-                }, 2000);
+                }, 1500);
             }
         }
+
         return Promise.reject(error);
     }
 );

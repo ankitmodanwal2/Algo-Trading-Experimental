@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'; // <--- Import useEffect
+import React, { useState } from 'react'; // ❌ REMOVED useEffect
 import { useForm } from 'react-hook-form';
 import { useNavigate } from 'react-router-dom';
 import useAuthStore from '../store/useAuthStore';
@@ -8,18 +8,10 @@ import toast from 'react-hot-toast';
 const Login = () => {
     const { register, handleSubmit, formState: { errors } } = useForm();
     const login = useAuthStore((state) => state.login);
-    const logout = useAuthStore((state) => state.logout); // <--- Import logout
     const navigate = useNavigate();
     const [isLoading, setIsLoading] = useState(false);
 
-    // --- NEW: CLEANUP ON MOUNT ---
-    useEffect(() => {
-        // Whenever user lands on Login page, wipe everything.
-        logout();
-        localStorage.removeItem('authToken');
-        console.log("Login Page Loaded: Session Cleared.");
-    }, []);
-    // -----------------------------
+    // ✅ REMOVED: The useEffect that was clearing token on mount
 
     const onSubmit = async (data) => {
         setIsLoading(true);
@@ -41,7 +33,6 @@ const Login = () => {
 
     return (
         <div className="min-h-screen flex bg-trade-bg font-sans">
-            {/* ... (Keep the rest of your UI JSX exactly the same as before) ... */}
             {/* Left Panel */}
             <div className="hidden lg:flex w-1/2 bg-trade-panel relative overflow-hidden items-center justify-center border-r border-trade-border">
                 <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-blue-900/20 to-trade-bg z-0"></div>
