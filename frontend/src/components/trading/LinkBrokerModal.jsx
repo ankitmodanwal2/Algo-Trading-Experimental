@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { X } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import api from '../../lib/api';
@@ -7,16 +7,31 @@ import toast from 'react-hot-toast';
 const LinkBrokerModal = ({ isOpen, onClose, onSuccess }) => {
     const [selectedBroker, setSelectedBroker] = useState('angelone');
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Unbreakable lock to prevent ghost requests
+    const submitLock = useRef(false);
+
     const { register, handleSubmit, reset } = useForm();
 
     if (!isOpen) return null;
 
-    const onSubmit = async (data) => {
+    const onSubmit = async (data, e) => {
+        // Stop event propagation immediately
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        // If lock is active or visual loading state is true, exit
+        if (submitLock.current || isSubmitting) return;
+
+        // Activate Lock
+        submitLock.current = true;
         setIsSubmitting(true);
+
         try {
             let credentials = {};
 
-            // 1. Build Broker-Specific Credentials Object
             if (selectedBroker === 'angelone') {
                 credentials = {
                     apiKey: data.apiKey,
@@ -25,39 +40,41 @@ const LinkBrokerModal = ({ isOpen, onClose, onSuccess }) => {
                     totpKey: data.totpKey
                 };
             } else if (selectedBroker === 'dhan') {
-                // Dhan uses different field names in the DTO
                 credentials = {
-                    clientId: data.clientCode, // Reuse clientCode input for Client ID
-                    accessToken: data.apiKey   // Reuse apiKey input for Access Token
+                    clientId: data.clientCode,
+                    accessToken: data.apiKey
                 };
             } else if (selectedBroker === 'fyers') {
-                // Placeholder for Fyers structure
                 credentials = {
                     appId: data.clientCode,
                     accessToken: data.apiKey
                 };
             }
 
-            // 2. Construct Payload
             const payload = {
                 brokerId: selectedBroker,
                 metadataJson: JSON.stringify({ name: data.name || 'Trading Account' }),
                 credentialsJson: JSON.stringify(credentials)
             };
 
-            // 3. Send to Backend (Backend handles validation)
-            await api.post('/brokers/link', payload);
+            const res = await api.post('/brokers/link', payload);
 
-            toast.success(`${selectedBroker.toUpperCase()} Linked Successfully!`);
-            reset();
-            onSuccess(); // Refresh the list on parent page
-            onClose();
-
+            if (res.status === 200) {
+                toast.success(`${selectedBroker.toUpperCase()} Linked Successfully!`);
+                reset();
+                if (onSuccess) onSuccess(); // Refresh parent list
+                onClose();
+            }
         } catch (err) {
+            console.error("Link Error:", err);
             const msg = err.response?.data?.message || 'Connection Failed. Check Credentials.';
-            toast.error(msg, { duration: 4000 });
+            toast.error(msg);
         } finally {
             setIsSubmitting(false);
+            // Release lock after a small delay to prevent rapid re-clicks
+            setTimeout(() => {
+                submitLock.current = false;
+            }, 500);
         }
     };
 
@@ -83,7 +100,7 @@ const LinkBrokerModal = ({ isOpen, onClose, onSuccess }) => {
                             value={selectedBroker}
                             onChange={(e) => {
                                 setSelectedBroker(e.target.value);
-                                reset(); // Clear form when switching brokers
+                                reset(); // Clear form when switching
                             }}
                             className="w-full bg-trade-bg border border-trade-border rounded-lg p-3 text-white focus:border-trade-primary outline-none"
                         >

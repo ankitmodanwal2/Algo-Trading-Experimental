@@ -9,7 +9,7 @@ const OrderForm = () => {
     const { register, handleSubmit, setValue, watch, reset } = useForm({
         defaultValues: {
             productType: 'INTRADAY',
-            orderType: 'MARKET', // Default per your request
+            orderType: 'MARKET',
             quantity: 1,
             price: 0
         }
@@ -21,6 +21,9 @@ const OrderForm = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [results, setResults] = useState([]);
     const [showResults, setShowResults] = useState(false);
+
+    // Track selected exchange to pass to backend
+    const [selectedExchange, setSelectedExchange] = useState('NSE_EQ');
 
     // Watch fields for UI logic
     const selectedOrderType = watch('orderType');
@@ -49,6 +52,11 @@ const OrderForm = () => {
     const handleSelectSymbol = (item) => {
         setValue('symbol', item.securityId);
         setSearchTerm(item.tradingSymbol);
+
+        // Capture Exchange from search result
+        const exch = item.exchangeSegment === 'NSE' ? 'NSE_EQ' : item.exchangeSegment;
+        setSelectedExchange(exch);
+
         setShowResults(false);
     };
 
@@ -56,20 +64,31 @@ const OrderForm = () => {
     const toggleOrderType = () => {
         const newType = selectedOrderType === 'MARKET' ? 'LIMIT' : 'MARKET';
         setValue('orderType', newType);
-        // Reset price to 0 if switching to Market to avoid confusion
         if (newType === 'MARKET') {
             setValue('price', 0);
         }
     };
 
     const onSubmit = async (data) => {
+        const finalSymbol = data.symbol || searchTerm;
+
+        if (!finalSymbol || finalSymbol.trim() === '') {
+            toast.error('Please select a stock symbol first!');
+            return;
+        }
+
         setLoading(true);
         try {
             await api.post('/orders/place', {
                 ...data,
                 brokerAccountId: 1, // Ideally dynamic
-                symbol: data.symbol || searchTerm,
-                price: data.orderType === 'MARKET' ? 0 : Number(data.price)
+                symbol: finalSymbol,
+                price: data.orderType === 'MARKET' ? 0 : Number(data.price),
+                // Send extra meta data
+                meta: {
+                    exchange: selectedExchange,
+                    productType: data.productType
+                }
             });
             toast.success('Order Placed Successfully');
             reset({
@@ -80,7 +99,8 @@ const OrderForm = () => {
             });
             setSearchTerm('');
         } catch (err) {
-            toast.error(err.response?.data?.message || 'Failed to place order');
+            const msg = err.response?.data?.message || err.message || 'Failed to place order';
+            toast.error(msg);
         } finally {
             setLoading(false);
         }
@@ -91,7 +111,7 @@ const OrderForm = () => {
             <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-semibold text-white">Place Order</h3>
                 <div className={`px-2 py-1 rounded text-xs font-bold ${selectedSide === 'BUY' ? 'bg-trade-buy/20 text-trade-buy' : 'bg-trade-sell/20 text-trade-sell'}`}>
-                    {selectedSide}
+                    {selectedSide || 'BUY'}
                 </div>
             </div>
 
@@ -218,7 +238,7 @@ const OrderForm = () => {
                 <div className="pt-2">
                     <div className="grid grid-cols-2 gap-0 bg-trade-bg rounded-lg p-1 border border-trade-border">
                         <label className="cursor-pointer">
-                            <input type="radio" value="BUY" {...register('side')} className="peer sr-only" />
+                            <input type="radio" value="BUY" {...register('side')} className="peer sr-only" defaultChecked />
                             <div className="text-center py-2.5 rounded-md font-bold text-sm transition-all peer-checked:bg-trade-buy peer-checked:text-white peer-checked:shadow-md text-trade-muted hover:text-white">
                                 BUY
                             </div>
@@ -236,7 +256,7 @@ const OrderForm = () => {
                     type="submit"
                     disabled={loading}
                     className={`w-full font-bold py-3.5 rounded-lg transition-all transform active:scale-[0.98] shadow-lg flex justify-center items-center gap-2 mt-2 ${
-                        selectedSide === 'BUY'
+                        selectedSide === 'BUY' || !selectedSide
                             ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white shadow-emerald-900/20'
                             : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 text-white shadow-red-900/20'
                     } disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none`}
@@ -247,7 +267,7 @@ const OrderForm = () => {
                             Processing...
                         </>
                     ) : (
-                        `EXECUTE ${selectedSide}`
+                        `EXECUTE ${selectedSide || 'BUY'}`
                     )}
                 </button>
             </form>

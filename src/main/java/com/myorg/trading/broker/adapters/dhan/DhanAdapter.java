@@ -66,9 +66,8 @@ public class DhanAdapter implements BrokerClient {
                         DhanCredentials creds = objectMapper.readValue(json, DhanCredentials.class);
                         String accessToken = creds.getAccessToken().trim();
 
-                        // Validate by fetching positions (read-only safe check)
                         return webClient.get()
-                                .uri("/v2/positions") // Use v2 as per reference project
+                                .uri("/v2/positions")
                                 .header("access-token", accessToken)
                                 .header("Content-Type", "application/json")
                                 .retrieve()
@@ -76,14 +75,14 @@ public class DhanAdapter implements BrokerClient {
                                 .map(resp -> resp.getStatusCode().is2xxSuccessful())
                                 .onErrorResume(e -> {
                                     if (e instanceof WebClientResponseException wcre) {
-                                        if (wcre.getStatusCode().value() == 401 || wcre.getStatusCode().value() == 403) {
-                                            return Mono.error(new RuntimeException("Invalid Access Token"));
-                                        }
+                                        String errorBody = wcre.getResponseBodyAsString();
+                                        log.error("Dhan Validation Failed: Status: {}, Body: {}", wcre.getStatusCode(), errorBody);
+                                        return Mono.error(new RuntimeException("Dhan Error: " + errorBody));
                                     }
-                                    return Mono.error(new RuntimeException("Dhan API Error: " + e.getMessage()));
+                                    return Mono.error(new RuntimeException("Connection Error: " + e.getMessage()));
                                 });
                     } catch (Exception e) {
-                        return Mono.error(new RuntimeException("Dhan Validation Error: " + e.getMessage()));
+                        return Mono.error(new RuntimeException("Internal Validation Error: " + e.getMessage()));
                     }
                 });
     }
@@ -92,10 +91,9 @@ public class DhanAdapter implements BrokerClient {
     public Mono<BrokerOrderResponse> placeOrder(String accountId, BrokerOrderRequest req) {
         return getCredentials(accountId)
                 .flatMap(creds -> webClient.post()
-                        .uri("/v2/orders") // Use v2 explicitly
+                        .uri("/v2/orders")
                         .header("access-token", creds.getAccessToken().trim())
                         .header("Content-Type", "application/json")
-                        // Pass ClientID from credentials to payload mapper
                         .bodyValue(mapToDhanPayload(req, creds.getClientId()))
                         .retrieve()
                         .bodyToMono(JsonNode.class)
@@ -107,30 +105,52 @@ public class DhanAdapter implements BrokerClient {
     public Mono<List<BrokerPosition>> getPositions(String accountId) {
         return getCredentials(accountId)
                 .flatMap(creds -> webClient.get()
-                        .uri("/v2/positions") // Use v2 explicitly
+                        .uri("/v2/positions")
                         .header("access-token", creds.getAccessToken().trim())
                         .header("Content-Type", "application/json")
                         .retrieve()
                         .bodyToMono(JsonNode.class)
                         .map(rootNode -> {
                             List<BrokerPosition> positions = new ArrayList<>();
-                            // Reference project logic: response is a List directly or inside data
-                            // WebClient might map it to ArrayNode if it's a list
                             if (rootNode.isArray()) {
                                 for (JsonNode node : rootNode) {
-                                    // Filter out closed positions (netQty == 0) like reference project
+                                    // 1. Filter out closed positions (netQty == 0)
                                     int netQty = node.path("netQty").asInt(0);
                                     if (netQty == 0) continue;
+
+                                    // 2. Logic to calculate Average Price (Same as Reference Project)
+                                    double avgPrice = 0.0;
+                                    if (netQty > 0) {
+                                        avgPrice = node.path("buyAvg").asDouble(0.0);
+                                        if (avgPrice == 0.0) avgPrice = node.path("avgPrice").asDouble(0.0);
+                                    } else {
+                                        avgPrice = node.path("sellAvg").asDouble(0.0);
+                                        if (avgPrice == 0.0) avgPrice = node.path("avgPrice").asDouble(0.0);
+                                    }
+                                    // Fallback: Day Buy Value / Day Buy Qty
+                                    if (avgPrice == 0.0) {
+                                        double dayBuyVal = node.path("dayBuyValue").asDouble(0.0);
+                                        int dayBuyQty = node.path("dayBuyQty").asInt(0);
+                                        if (dayBuyQty > 0) avgPrice = dayBuyVal / dayBuyQty;
+                                    }
+
+                                    // 3. Logic for LTP
+                                    double ltp = node.path("lastTradedPrice").asDouble(0.0);
+                                    if (ltp == 0.0) ltp = node.path("ltp").asDouble(0.0);
+
+                                    // 4. Logic for PnL
+                                    double realized = node.path("realizedProfit").asDouble(0.0);
+                                    double unrealized = node.path("unrealizedProfit").asDouble(0.0);
 
                                     positions.add(BrokerPosition.builder()
                                             .symbol(node.path("tradingSymbol").asText("Unknown"))
                                             .productType(node.path("productType").asText("INTRADAY"))
                                             .netQuantity(new BigDecimal(netQty))
-                                            .avgPrice(new BigDecimal(node.path("avgPrice").asDouble(0.0)))
-                                            .ltp(new BigDecimal(node.path("ltp").asDouble(0.0)))
-                                            .pnl(new BigDecimal(node.path("realizedProfit").asDouble(0.0) + node.path("unrealizedProfit").asDouble(0.0)))
-                                            .buyQty(new BigDecimal(node.path("buyQty").asText("0")))
-                                            .sellQty(new BigDecimal(node.path("sellQty").asText("0")))
+                                            .avgPrice(new BigDecimal(avgPrice))
+                                            .ltp(new BigDecimal(ltp))
+                                            .pnl(new BigDecimal(realized + unrealized))
+                                            .buyQty(new BigDecimal(node.path("buyQty").asInt(0)))
+                                            .sellQty(new BigDecimal(node.path("sellQty").asInt(0)))
                                             .build());
                                 }
                             }
@@ -143,13 +163,18 @@ public class DhanAdapter implements BrokerClient {
         Map<String, Object> payload = new HashMap<>();
         payload.put("dhanClientId", clientId);
         payload.put("transactionType", req.getSide().name());
-        payload.put("exchangeSegment", "NSE_EQ");
 
-        // --- USE DYNAMIC PRODUCT TYPE ---
-        // Default to INTRADAY if missing
+        // --- 🌟 DYNAMIC EXCHANGE LOGIC 🌟 ---
+        // Defaults to NSE_EQ, but allows override via meta (passed from frontend)
+        String exchange = "NSE_EQ";
+        if (req.getMeta() != null && req.getMeta().containsKey("exchange")) {
+            exchange = (String) req.getMeta().get("exchange");
+        }
+        payload.put("exchangeSegment", exchange);
+
+        // --- DYNAMIC PRODUCT TYPE ---
         String pType = req.getMeta() != null ? (String) req.getMeta().getOrDefault("productType", "INTRADAY") : "INTRADAY";
         payload.put("productType", pType);
-        // --------------------------------
 
         payload.put("orderType", req.getOrderType().name());
         payload.put("validity", "DAY");
@@ -159,6 +184,7 @@ public class DhanAdapter implements BrokerClient {
         if (req.getPrice() != null && req.getPrice().doubleValue() > 0) {
             payload.put("price", req.getPrice());
         }
+
         return payload;
     }
 

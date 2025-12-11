@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -57,8 +59,23 @@ public class OrderExecutionService {
         // BETTER: Let's assume you will add it to Order entity later.
         // For THIS step, I will map it to "INTRADAY" if null to prevent crashes.
 
-        String productType = "INTRADAY";
-        String pType = order.getProductType() != null ? order.getProductType() : "INTRADAY";
+        //String productType = "INTRADAY";
+        //String pType = order.getProductType() != null ? order.getProductType() : "INTRADAY";
+
+        // ... inside executeOrder ...
+        String productType = order.getProductType() != null ? order.getProductType() : "INTRADAY";
+
+        // 🌟 FIX: Determine Exchange based on Symbol or saved Meta (if you had it)
+        // For now, we will guess NSE_EQ unless the symbol looks like an option/future.
+        // Ideally, store 'exchange' in Order entity.
+        // Hack: Frontend sends exchange in 'symbol' field temporarily? No, that breaks securityId.
+        // Let's default to NSE_EQ for now, but if you add 'exchange' column to Order later, map it here.
+        String exchange = "NSE_EQ";
+
+        // Map containing both productType and exchange
+        Map<String, Object> metaMap = new HashMap<>();
+        metaMap.put("productType", productType);
+        metaMap.put("exchange", exchange);
 
         BrokerOrderRequest brokerReq = BrokerOrderRequest.builder()
                 .clientOrderId("client-" + order.getId())
@@ -68,14 +85,7 @@ public class OrderExecutionService {
                 .price(order.getPrice())
                 .orderType(OrderType.valueOf(order.getOrderType()))
                 .timeInForce(TimeInForce.GTC)
-                .symbol(order.getSymbol())
-                .side(OrderSide.valueOf(order.getSide()))
-                .quantity(order.getQuantity())
-                .price(order.getPrice())
-                .orderType(OrderType.valueOf(order.getOrderType()))
-                .timeInForce(TimeInForce.GTC)
-                // --- PASS TO ADAPTER VIA META ---
-                .meta(java.util.Map.of("productType", pType))
+                .meta(metaMap) // <--- Pass the map
                 .build();
 
         try {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react'; // Import useRef
 import api from '../../lib/api';
 import { RefreshCw, AlertCircle } from 'lucide-react';
 
@@ -9,57 +9,74 @@ const PositionsTable = () => {
     const [totalPnl, setTotalPnl] = useState(0);
     const [activeBrokerId, setActiveBrokerId] = useState(null);
 
-    // 1. First, fetch the list of linked brokers to find a valid ID
+    // Track mounted state to prevent setting state on unmounted component
+    const isMounted = useRef(true);
+
+    useEffect(() => {
+        return () => { isMounted.current = false; };
+    }, []);
+
     const fetchBrokerId = async () => {
         try {
             const res = await api.get('/brokers/linked');
-            if (res.data && res.data.length > 0) {
-                // Automatically pick the most recently added broker (last in the list)
+            if (isMounted.current && res.data && res.data.length > 0) {
+                // Pick the most recently added broker
                 const newest = res.data[res.data.length - 1];
                 setActiveBrokerId(newest.id);
-            } else {
-                setError("No brokers linked. Please link a broker first.");
             }
         } catch (err) {
             console.error("Failed to fetch linked brokers", err);
-            setError("Failed to connect to backend service.");
         }
     };
 
-    // Run once on mount to get the ID
     useEffect(() => {
         fetchBrokerId();
     }, []);
 
-    // 2. Once we have an ID, fetch positions for it
     const fetchPositions = async () => {
-        if (!activeBrokerId) {
-            console.log("Skipping fetch: No Active Broker ID");
+        // 1. Safety Check: Broker ID must exist
+        if (!activeBrokerId) return;
+
+        // 2. Safety Check: Token must exist
+        const token = localStorage.getItem('authToken');
+        if (!token) {
+            console.warn("Skipping position fetch: No Auth Token");
             return;
         }
 
-        // Prevent duplicate fetches if already loading
-        if (loading) return;
+        if (loading) return; // Prevent overlapping fetches
 
-        setLoading(true);
+        // Only show loader on first load (to avoid flicker on poll)
+        if (positions.length === 0) setLoading(true);
+
         try {
-            console.log("Fetching positions for Broker ID:", activeBrokerId);
             const res = await api.get(`/brokers/${activeBrokerId}/positions`);
-            // ... rest of logic
+
+            if (isMounted.current && Array.isArray(res.data)) {
+                setPositions(res.data);
+                const total = res.data.reduce((sum, pos) => sum + (parseFloat(pos.pnl) || 0), 0);
+                setTotalPnl(total);
+                setError(null);
+            }
         } catch (err) {
-            console.error("Fetch error:", err);
+            console.error("Failed to fetch positions:", err);
+            // Don't show error on 401 (let global handler handle it), only others
+            if (err.response?.status !== 401 && isMounted.current) {
+                setError("Could not load positions.");
+            }
         } finally {
-            setLoading(false);
+            if (isMounted.current) setLoading(false);
         }
     };
 
-    // Poll for positions whenever activeBrokerId changes
+    // Poll for positions
     useEffect(() => {
+        let interval;
         if (activeBrokerId) {
-            fetchPositions();
-            const interval = setInterval(fetchPositions, 5000);
-            return () => clearInterval(interval);
+            fetchPositions(); // Initial fetch
+            interval = setInterval(fetchPositions, 5000); // Poll every 5s
         }
+        return () => clearInterval(interval);
     }, [activeBrokerId]);
 
     if (error) {
