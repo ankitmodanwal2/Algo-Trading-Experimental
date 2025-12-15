@@ -84,31 +84,35 @@ const PositionsTable = () => {
 
     // 4. Close Position Logic
     const closePosition = async (pos) => {
-            if (!activeBrokerId) return;
+        if (!activeBrokerId) return;
 
-            // Confirmation
-            if (!window.confirm(`Exit ${pos.symbol} (${pos.netQuantity} Qty)?`)) return;
+        // Confirmation
+        if (!window.confirm(`Exit ${pos.symbol} (${pos.netQuantity} Qty)?`)) return;
 
-            setLoading(true);
-            try {
-                const token = localStorage.getItem('authToken');
+        setLoading(true);
+        try {
+            const token = localStorage.getItem('authToken');
 
-                // 🔥 FIX: Send complete payload with ALL required fields
-                await api.post(`/brokers/${activeBrokerId}/positions/close`, {
-                    securityId: pos.securityId,         // ✅ Security ID (numeric)
-                    symbol: pos.symbol,                  // ✅ Trading Symbol (text)
-                    exchange: pos.exchange,              // ✅ Exchange
-                    productType: pos.productType,        // ✅ Product Type
-                    quantity: Math.abs(pos.netQuantity), // ✅ Positive quantity
-                    positionType: parseFloat(pos.netQuantity) > 0 ? "LONG" : "SHORT" // ✅ Direction
-                }, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
+            // 🔥 FIX: Send ALL required fields to backend
+            await api.post(`/brokers/${activeBrokerId}/positions/close`, {
+                securityId: pos.securityId,      // The ID (e.g., "3045")
+                symbol: pos.symbol,              // Human-readable name (e.g., "RELIANCE-EQ")
+                exchange: pos.exchange || "NSE_EQ",
+                productType: pos.productType || "INTRADAY",
+                quantity: Math.abs(parseFloat(pos.netQuantity)),  // Always positive
+                positionType: parseFloat(pos.netQuantity) > 0 ? "LONG" : "SHORT"
+            }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
 
             toast.success(`Exit Order Placed for ${pos.symbol}`);
             fetchPositions(); // Refresh immediately
         } catch (err) {
-            toast.error(err.response?.data?.message || 'Failed to exit position');
+            console.error("Exit Error:", err);
+            const errMsg = err.response?.data?.message ||
+                          err.response?.data?.error ||
+                          'Failed to exit position';
+            toast.error(errMsg);
         } finally {
             setLoading(false);
         }

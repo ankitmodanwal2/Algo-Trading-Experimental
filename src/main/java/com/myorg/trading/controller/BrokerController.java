@@ -17,6 +17,10 @@ import reactor.core.publisher.Mono;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import lombok.extern.slf4j.Slf4j;
+import java.math.BigDecimal;
+
+@Slf4j
 
 @RestController
 @RequestMapping("/api/v1/brokers")
@@ -130,36 +134,60 @@ public class BrokerController {
 
         BrokerClient client = brokerRegistry.getById(acc.getBrokerId());
 
-        // Determine exit side: LONG position → SELL, SHORT position → BUY
+        // 🔥 FIX: Construct proper exit order
         String positionType = (String) req.get("positionType");
         String side = "LONG".equalsIgnoreCase(positionType) ? "SELL" : "BUY";
 
-        // 🔥 FIX: Use HashMap instead of Map.of() to allow null values
-        Map<String, Object> metaMap = new HashMap<>();
-        metaMap.put("exchange", req.get("exchange"));
-        metaMap.put("productType", req.get("productType"));
-        metaMap.put("tradingSymbol", req.get("symbol")); // ✅ Pass trading symbol
+        // Extract required fields with null checks
+        String securityId = (String) req.get("securityId");
+        String symbol = (String) req.get("symbol");
 
-        // Construct Exit Order Request
-        com.myorg.trading.broker.api.BrokerOrderRequest orderReq = com.myorg.trading.broker.api.BrokerOrderRequest.builder()
-                .symbol((String) req.get("securityId")) // Security ID
-                .quantity(new java.math.BigDecimal(req.get("quantity").toString()))
-                .side(com.myorg.trading.broker.api.OrderSide.valueOf(side))
-                .orderType(com.myorg.trading.broker.api.OrderType.MARKET)
-                .meta(metaMap)
-                .build();
+        if (securityId == null || securityId.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "missing_security_id",
+                    "message", "Security ID is required to close position"
+            ));
+        }
+
+        String exchange = (String) req.getOrDefault("exchange", "NSE");
+        String productType = (String) req.getOrDefault("productType", "INTRADAY");
+
+        // Convert quantity to BigDecimal
+        Object qtyObj = req.get("quantity");
+        BigDecimal quantity;
+        if (qtyObj instanceof Integer) {
+            quantity = new BigDecimal((Integer) qtyObj);
+        } else if (qtyObj instanceof Double) {
+            quantity = BigDecimal.valueOf((Double) qtyObj);
+        } else if (qtyObj instanceof String) {
+            quantity = new BigDecimal((String) qtyObj);
+        } else {
+            quantity = new BigDecimal(qtyObj.toString());
+        }
+
+        // Construct Order Request
+        com.myorg.trading.broker.api.BrokerOrderRequest orderReq =
+                com.myorg.trading.broker.api.BrokerOrderRequest.builder()
+                        .symbol(securityId)  // Send securityId as symbol
+                        .quantity(quantity)
+                        .side(com.myorg.trading.broker.api.OrderSide.valueOf(side))
+                        .orderType(com.myorg.trading.broker.api.OrderType.MARKET)
+                        .meta(Map.of(
+                                "exchange", exchange,
+                                "productType", productType,
+                                "tradingSymbol", symbol != null ? symbol : ""
+                        ))
+                        .build();
 
         try {
-            com.myorg.trading.broker.api.BrokerOrderResponse response =
-                    client.placeOrder(accountId.toString(), orderReq).block();
-
+            var response = client.placeOrder(accountId.toString(), orderReq).block();
             return ResponseEntity.ok(response);
         } catch (Exception e) {
-            // Return error without crashing
-            Map<String, Object> errorResponse = new HashMap<>();
-            errorResponse.put("error", "exit_failed");
-            errorResponse.put("message", e.getMessage());
-            return ResponseEntity.status(500).body(errorResponse);
+            log.error("Failed to close position", e);
+            return ResponseEntity.status(500).body(Map.of(
+                    "error", "exit_failed",
+                    "message", e.getMessage() != null ? e.getMessage() : "Unknown error occurred"
+            ));
         }
     }
 

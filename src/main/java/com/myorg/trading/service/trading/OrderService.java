@@ -10,10 +10,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
-/**
- * High-level order API used by controllers.
- */
 @Service
 public class OrderService {
 
@@ -42,16 +40,14 @@ public class OrderService {
     }
 
     @Transactional
-    public Order placeOrderNow(Long orderId) {
+    public Order placeOrderNow(Long orderId, String tradingSymbol, Map<String, Object> meta) {
         Order order = orderRepository.findById(orderId).orElseThrow();
-        // asynchronously execute to avoid blocking controller threads
-        executionService.executeOrderAsync(order.getId());
+        executionService.executeOrderAsync(order.getId(), tradingSymbol, meta);
         return order;
     }
 
     @Transactional
     public ScheduledOrder scheduleOrder(Long orderId, Instant triggerTime) throws org.quartz.SchedulerException {
-        // save scheduled order record, schedule Quartz job
         ScheduledOrder so = ScheduledOrder.builder()
                 .orderId(orderId)
                 .triggerTime(triggerTime)

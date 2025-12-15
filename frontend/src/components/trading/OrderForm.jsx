@@ -107,28 +107,41 @@ const OrderForm = ({onSymbolSelect}) => {
     };
 
     const onSubmit = async (data) => {
-            if (!activeBrokerId) {
-                toast.error("Please select a broker first.");
-                return;
-            }
-            if (!selectedSecurityId) {
-                toast.error("Please select a stock from the search list.");
-                return;
-            }
+        if (!activeBrokerId) {
+            toast.error("Please select a broker first.");
+            return;
+        }
+        if (!selectedSecurityId) {
+            toast.error("Please select a stock from the search list.");
+            return;
+        }
 
-            setLoading(true);
-            try {
-                await api.post('/orders/place', {
-                    ...data,
-                    brokerAccountId: activeBrokerId,
-                    symbol: selectedSecurityId,
-                    price: data.orderType === 'MARKET' ? 0 : Number(data.price),
-                    meta: {
-                        exchange: selectedExchange,
-                        tradingSymbol: searchTerm, // ✅ FIX: Pass the actual trading symbol
-                        productType: data.productType
-                    }
-                });
+        // 🔥 CRITICAL: Ensure we have the trading symbol
+        if (!searchTerm || searchTerm.trim() === '') {
+            toast.error("Trading symbol is missing. Please search and select again.");
+            return;
+        }
+
+        setLoading(true);
+        try {
+            // 🔥 FIX: Send BOTH securityId and tradingSymbol
+            const orderPayload = {
+                brokerAccountId: activeBrokerId,
+                symbol: selectedSecurityId,  // Numeric ID (e.g., "3045")
+                side: data.side,
+                quantity: Number(data.quantity),
+                price: data.orderType === 'MARKET' ? 0 : Number(data.price),
+                orderType: data.orderType,
+                productType: data.productType,
+                meta: {
+                    exchange: selectedExchange,
+                    tradingSymbol: searchTerm  // Text symbol (e.g., "RELIANCE-EQ")
+                }
+            };
+
+            console.log("📤 Sending Order:", orderPayload); // Debug log
+
+            await api.post('/orders/place', orderPayload);
 
             toast.success('Order Placed Successfully');
             reset({

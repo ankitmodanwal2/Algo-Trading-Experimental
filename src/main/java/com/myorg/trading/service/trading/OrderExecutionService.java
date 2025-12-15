@@ -7,8 +7,8 @@ import com.myorg.trading.domain.entity.Order;
 import com.myorg.trading.domain.entity.OrderStatus;
 import com.myorg.trading.domain.repository.BrokerAccountRepository;
 import com.myorg.trading.domain.repository.OrderRepository;
-import com.myorg.trading.service.broker.BrokerAccountService;
 import jakarta.transaction.Transactional;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -17,81 +17,64 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
-/**
- * Core executor: maps Order -> BrokerOrderRequest, calls BrokerClient, updates Order entity.
- */
+@Slf4j
 @Service
 public class OrderExecutionService {
 
     private final OrderRepository orderRepository;
     private final BrokerRegistry brokerRegistry;
     private final BrokerAccountRepository brokerAccountRepository;
-    private final BrokerAccountService brokerAccountService;
 
     public OrderExecutionService(OrderRepository orderRepository,
                                  BrokerRegistry brokerRegistry,
-                                 BrokerAccountRepository brokerAccountRepository,
-                                 BrokerAccountService brokerAccountService) {
+                                 BrokerAccountRepository brokerAccountRepository) {
         this.orderRepository = orderRepository;
         this.brokerRegistry = brokerRegistry;
         this.brokerAccountRepository = brokerAccountRepository;
-        this.brokerAccountService = brokerAccountService;
     }
 
-    /**
-     * Synchronous (blocking) execution — used by Quartz Job.
-     */
     @Transactional
-    public void executeOrder(Long orderId) {
+    public void executeOrder(Long orderId, String tradingSymbol, Map<String, Object> meta) {
         Order order = orderRepository.findById(orderId).orElseThrow();
-        // ... (existing code finding account) ...
+
+        // 🌟 CRITICAL: Log what we received
+        log.info("📦 Executing Order {} with tradingSymbol: {} and meta: {}", orderId, tradingSymbol, meta);
+
+        if (tradingSymbol == null || tradingSymbol.isBlank()) {
+            log.warn("⚠️ Order {} has only numeric symbol {}, missing trading symbol", orderId, order.getSymbol());
+            tradingSymbol = order.getSymbol() + "-EQ"; // Emergency fallback
+        }
+
         BrokerAccount brokerAccount = brokerAccountRepository.findById(order.getBrokerAccountId()).orElseThrow();
         String accountId = brokerAccount.getId().toString();
         BrokerClient client = brokerRegistry.getById(brokerAccount.getBrokerId());
 
-        // --- FIX: Extract Product Type from where we stored it (or default to INTRADAY) ---
-        // Note: For now, we assume the Controller passed it.
-        // Ideally, 'Order' entity should also save 'productType', but for now let's hardcode a default
-        // or pass it via a transient field if you modified Order entity.
-
-        // Since we didn't add 'productType' to Order Entity yet, we will default to "INTRADAY"
-        // OR we can misuse 'clientOrderId' or similar if we don't want DB migration right now.
-        // BETTER: Let's assume you will add it to Order entity later.
-        // For THIS step, I will map it to "INTRADAY" if null to prevent crashes.
-
-        //String productType = "INTRADAY";
-        //String pType = order.getProductType() != null ? order.getProductType() : "INTRADAY";
-
-        // ... inside executeOrder ...
         String productType = order.getProductType() != null ? order.getProductType() : "INTRADAY";
+        String exchange = meta != null ? (String) meta.getOrDefault("exchange", "NSE_EQ") : "NSE_EQ";
 
-        // 🌟 FIX: Determine Exchange based on Symbol or saved Meta (if you had it)
-        // For now, we will guess NSE_EQ unless the symbol looks like an option/future.
-        // Ideally, store 'exchange' in Order entity.
-        // Hack: Frontend sends exchange in 'symbol' field temporarily? No, that breaks securityId.
-        // Let's default to NSE_EQ for now, but if you add 'exchange' column to Order later, map it here.
-        String exchange = "NSE_EQ";
-
-        // Map containing both productType and exchange
+        // 🔥 FIX: Build meta map with BOTH tradingSymbol AND exchange
         Map<String, Object> metaMap = new HashMap<>();
         metaMap.put("productType", productType);
         metaMap.put("exchange", exchange);
+        metaMap.put("tradingSymbol", tradingSymbol); // ✅ CRITICAL ADDITION
+
+        log.info("✅ Final Order Payload: symbol={}, tradingSymbol={}, exchange={}, productType={}",
+                order.getSymbol(), tradingSymbol, exchange, productType);
 
         BrokerOrderRequest brokerReq = BrokerOrderRequest.builder()
                 .clientOrderId("client-" + order.getId())
-                .symbol(order.getSymbol())
+                .symbol(order.getSymbol()) // Security ID (numeric)
                 .side(OrderSide.valueOf(order.getSide()))
                 .quantity(order.getQuantity())
                 .price(order.getPrice())
                 .orderType(OrderType.valueOf(order.getOrderType()))
                 .timeInForce(TimeInForce.GTC)
-                .meta(metaMap) // <--- Pass the map
+                .meta(metaMap)
                 .build();
 
         try {
             Mono<BrokerOrderResponse> respMono = client.placeOrder(accountId, brokerReq);
             BrokerOrderResponse resp = respMono.onErrorResume(e -> {
-                // convert to failed response
                 return Mono.just(new BrokerOrderResponse(null, "REJECTED", e.getMessage(), null));
             }).block();
 
@@ -99,21 +82,21 @@ public class OrderExecutionService {
                 order.setBrokerOrderId(resp.getOrderId());
                 order.setStatus(OrderStatus.PLACED);
                 order.setExecutedAt(Instant.now());
+                log.info("✅ Order {} executed successfully. Broker Order ID: {}", orderId, resp.getOrderId());
             } else {
                 order.setStatus(OrderStatus.FAILED);
+                log.error("❌ Order {} failed: {}", orderId, resp != null ? resp.getMessage() : "Unknown error");
             }
             orderRepository.save(order);
         } catch (Exception e) {
             order.setStatus(OrderStatus.FAILED);
             orderRepository.save(order);
+            log.error("❌ Order {} execution crashed", orderId, e);
             throw e;
         }
     }
 
-    /**
-     * Async execution for API usage — delegates to thread pool.
-     */
-    public void executeOrderAsync(Long orderId) {
-        CompletableFuture.runAsync(() -> executeOrder(orderId));
+    public void executeOrderAsync(Long orderId, String tradingSymbol, Map<String, Object> meta) {
+        CompletableFuture.runAsync(() -> executeOrder(orderId, tradingSymbol, meta));
     }
 }

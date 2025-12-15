@@ -6,6 +6,7 @@ import lombok.Data;
 
 import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
+import java.util.Map;
 
 @Data
 public class PlaceOrderRequest {
@@ -13,7 +14,7 @@ public class PlaceOrderRequest {
     private Long brokerAccountId;
 
     @NotNull
-    private String symbol;
+    private String symbol; // Security ID (e.g., "3499")
 
     @NotNull
     private OrderSide side;
@@ -26,6 +27,8 @@ public class PlaceOrderRequest {
     @NotNull
     private OrderType orderType;
 
-    // --- NEW FIELD ---
     private String productType; // INTRADAY, CNC, etc.
+
+    // 🔥 NEW: Accept meta from frontend
+    private Map<String, Object> meta; // Contains tradingSymbol, exchange, etc.
 }

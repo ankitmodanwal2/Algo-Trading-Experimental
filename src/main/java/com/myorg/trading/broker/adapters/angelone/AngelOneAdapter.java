@@ -163,36 +163,52 @@ public class AngelOneAdapter implements BrokerClient {
         Map<String, Object> payload = new HashMap<>();
         Map<String, Object> meta = req.getMeta() != null ? req.getMeta() : Map.of();
 
+        // 🔥 DEBUG: Log what we received
+        log.info("🔍 Mapping Order Request:");
+        log.info("   Symbol (ID): {}", req.getSymbol());
+        log.info("   Side: {}", req.getSide());
+        log.info("   Quantity: {}", req.getQuantity());
+        log.info("   Meta: {}", meta);
+
         payload.put("variety", "NORMAL");
 
-        // 🔥 CRITICAL FIX: Extract the correct trading symbol from metadata
-        // The frontend sends BOTH securityId (req.getSymbol()) AND tradingSymbol (in meta)
+        // Get tradingSymbol from meta
         String tradingSymbol = (String) meta.get("tradingSymbol");
 
         if (tradingSymbol == null || tradingSymbol.isBlank()) {
-            throw new IllegalArgumentException("Missing tradingSymbol in order metadata");
+            tradingSymbol = req.getSymbol();
         }
 
-        // Angel requires "-EQ" suffix for NSE Equity if not already present
-        String exchange = (String) meta.getOrDefault("exchange", "NSE_EQ");
-        if ((exchange.equals("NSE") || exchange.equals("NSE_EQ")) && !tradingSymbol.endsWith("-EQ")) {
+        // Remove any existing -EQ suffix
+        tradingSymbol = tradingSymbol.replace("-EQ", "");
+
+        // Angel requires "-EQ" suffix for NSE equity
+        String exchange = (String) meta.getOrDefault("exchange", "NSE");
+        if ("NSE".equals(exchange) || "NSE_EQ".equals(exchange)) {
             tradingSymbol += "-EQ";
         }
 
         payload.put("tradingsymbol", tradingSymbol);
-
-        // Symbol token should be the Security ID (numeric)
         payload.put("symboltoken", req.getSymbol());
-
         payload.put("transactiontype", req.getSide().name());
-        payload.put("exchange", "NSE"); // Hardcoded to NSE for now, or use meta.get("exchange")
+        payload.put("exchange", "NSE");
         payload.put("ordertype", req.getOrderType().name());
-        payload.put("producttype", "INTRADAY");
+
+        String productType = "INTRADAY";
+        if (meta.containsKey("productType")) {
+            String reqProduct = (String) meta.get("productType");
+            productType = "CNC".equalsIgnoreCase(reqProduct) ? "DELIVERY" : "INTRADAY";
+        }
+        payload.put("producttype", productType);
+
         payload.put("duration", "DAY");
-        payload.put("price", req.getPrice() != null ? req.getPrice() : "0");
-        payload.put("quantity", req.getQuantity());
+        payload.put("price", req.getPrice() != null ? req.getPrice().toString() : "0");
+        payload.put("quantity", req.getQuantity().toString());
         payload.put("squareoff", "0");
         payload.put("stoploss", "0");
+
+        // 🔥 DEBUG: Log final payload
+        log.info("📦 Angel One Payload: {}", payload);
 
         return payload;
     }
@@ -242,8 +258,14 @@ public class AngelOneAdapter implements BrokerClient {
 
                                     List<BrokerPosition> positions = new ArrayList<>();
                                     for (JsonNode node : dataNode) {
+                                        // 🔥 FIX: Extract symboltoken (securityId) from Angel response
+                                        String symbolToken = node.path("symboltoken").asText();
+                                        String tradingSymbol = node.path("tradingsymbol").asText();
+
                                         positions.add(BrokerPosition.builder()
-                                                .symbol(node.path("tradingsymbol").asText())
+                                                .symbol(tradingSymbol)
+                                                .securityId(symbolToken)  // ✅ This is the ID we need
+                                                .exchange("NSE")           // Angel uses NSE by default
                                                 .productType(node.path("producttype").asText())
                                                 .netQuantity(new BigDecimal(node.path("netqty").asText("0")))
                                                 .avgPrice(new BigDecimal(node.path("avgnetprice").asText("0")))
