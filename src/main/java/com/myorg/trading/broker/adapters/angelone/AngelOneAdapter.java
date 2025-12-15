@@ -165,19 +165,23 @@ public class AngelOneAdapter implements BrokerClient {
 
         payload.put("variety", "NORMAL");
 
-        // 🌟 FIX: Use the text symbol from metadata for 'tradingsymbol'
-        // If meta is missing, fallback to req.getSymbol() (though that might be the ID)
-        String tradingSymbol = (String) meta.getOrDefault("tradingSymbol", req.getSymbol());
+        // 🔥 CRITICAL FIX: Extract the correct trading symbol from metadata
+        // The frontend sends BOTH securityId (req.getSymbol()) AND tradingSymbol (in meta)
+        String tradingSymbol = (String) meta.get("tradingSymbol");
 
-        // Angel requires "-EQ" suffix for Equity segments if not present
-        if ("NSE".equals(meta.get("exchange")) || "NSE_EQ".equals(meta.get("exchange"))) {
-            if (!tradingSymbol.endsWith("-EQ")) {
-                tradingSymbol += "-EQ";
-            }
+        if (tradingSymbol == null || tradingSymbol.isBlank()) {
+            throw new IllegalArgumentException("Missing tradingSymbol in order metadata");
         }
+
+        // Angel requires "-EQ" suffix for NSE Equity if not already present
+        String exchange = (String) meta.getOrDefault("exchange", "NSE_EQ");
+        if ((exchange.equals("NSE") || exchange.equals("NSE_EQ")) && !tradingSymbol.endsWith("-EQ")) {
+            tradingSymbol += "-EQ";
+        }
+
         payload.put("tradingsymbol", tradingSymbol);
 
-        // 🌟 FIX: Use the ID (which comes in req.getSymbol()) as 'symboltoken'
+        // Symbol token should be the Security ID (numeric)
         payload.put("symboltoken", req.getSymbol());
 
         payload.put("transactiontype", req.getSide().name());

@@ -107,27 +107,28 @@ const OrderForm = ({onSymbolSelect}) => {
     };
 
     const onSubmit = async (data) => {
-        if (!activeBrokerId) {
-            toast.error("Please select a broker first.");
-            return;
-        }
-        if (!selectedSecurityId) {
-            toast.error("Please select a stock from the search list.");
-            return;
-        }
+            if (!activeBrokerId) {
+                toast.error("Please select a broker first.");
+                return;
+            }
+            if (!selectedSecurityId) {
+                toast.error("Please select a stock from the search list.");
+                return;
+            }
 
-        setLoading(true);
-        try {
-            await api.post('/orders/place', {
-                ...data,
-                brokerAccountId: activeBrokerId,
-                symbol: selectedSecurityId,
-                price: data.orderType === 'MARKET' ? 0 : Number(data.price),
-                meta: {
-                    exchange: selectedExchange,
-                    tradingSymbol: searchTerm
-                }
-            });
+            setLoading(true);
+            try {
+                await api.post('/orders/place', {
+                    ...data,
+                    brokerAccountId: activeBrokerId,
+                    symbol: selectedSecurityId,
+                    price: data.orderType === 'MARKET' ? 0 : Number(data.price),
+                    meta: {
+                        exchange: selectedExchange,
+                        tradingSymbol: searchTerm, // ✅ FIX: Pass the actual trading symbol
+                        productType: data.productType
+                    }
+                });
 
             toast.success('Order Placed Successfully');
             reset({

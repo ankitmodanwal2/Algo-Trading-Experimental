@@ -84,26 +84,26 @@ const PositionsTable = () => {
 
     // 4. Close Position Logic
     const closePosition = async (pos) => {
-        if (!activeBrokerId) return;
+            if (!activeBrokerId) return;
 
-        // Confirmation
-        if (!window.confirm(`Exit ${pos.symbol} (${pos.netQuantity} Qty)?`)) return;
+            // Confirmation
+            if (!window.confirm(`Exit ${pos.symbol} (${pos.netQuantity} Qty)?`)) return;
 
-        setLoading(true);
-        try {
-            const token = localStorage.getItem('authToken');
+            setLoading(true);
+            try {
+                const token = localStorage.getItem('authToken');
 
-            // Sending payload exactly as Reference Project's ClosePositionRequest
-            await api.post(`/brokers/${activeBrokerId}/positions/close`, {
-                securityId: pos.securityId,
-                symbol: pos.symbol,
-                exchange: pos.exchange,
-                productType: pos.productType,
-                quantity: Math.abs(pos.netQuantity), // Always positive for order
-                positionType: parseFloat(pos.netQuantity) > 0 ? "LONG" : "SHORT"
-            }, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+                // 🔥 FIX: Send complete payload with ALL required fields
+                await api.post(`/brokers/${activeBrokerId}/positions/close`, {
+                    securityId: pos.securityId,         // ✅ Security ID (numeric)
+                    symbol: pos.symbol,                  // ✅ Trading Symbol (text)
+                    exchange: pos.exchange,              // ✅ Exchange
+                    productType: pos.productType,        // ✅ Product Type
+                    quantity: Math.abs(pos.netQuantity), // ✅ Positive quantity
+                    positionType: parseFloat(pos.netQuantity) > 0 ? "LONG" : "SHORT" // ✅ Direction
+                }, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
 
             toast.success(`Exit Order Placed for ${pos.symbol}`);
             fetchPositions(); // Refresh immediately

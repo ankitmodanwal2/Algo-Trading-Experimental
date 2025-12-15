@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -129,28 +130,37 @@ public class BrokerController {
 
         BrokerClient client = brokerRegistry.getById(acc.getBrokerId());
 
-        // We use the adapter's specialized close logic
-        // But since BrokerClient interface is generic, we can also use placeOrder if we construct it right.
-        // However, DhanAdapter might need a specific 'closePosition' method if we want to follow reference strictly.
-        // For now, let's use the 'DhanAdapter' specific method via casting or extend the Interface.
-
-        // Better Approach: Construct a Market Order that reverses the position
-        String positionType = (String) req.get("positionType"); // LONG or SHORT
+        // Determine exit side: LONG position → SELL, SHORT position → BUY
+        String positionType = (String) req.get("positionType");
         String side = "LONG".equalsIgnoreCase(positionType) ? "SELL" : "BUY";
 
-        // Construct Order Request
+        // 🔥 FIX: Use HashMap instead of Map.of() to allow null values
+        Map<String, Object> metaMap = new HashMap<>();
+        metaMap.put("exchange", req.get("exchange"));
+        metaMap.put("productType", req.get("productType"));
+        metaMap.put("tradingSymbol", req.get("symbol")); // ✅ Pass trading symbol
+
+        // Construct Exit Order Request
         com.myorg.trading.broker.api.BrokerOrderRequest orderReq = com.myorg.trading.broker.api.BrokerOrderRequest.builder()
-                .symbol((String) req.get("securityId")) // Send SecurityID as symbol!
+                .symbol((String) req.get("securityId")) // Security ID
                 .quantity(new java.math.BigDecimal(req.get("quantity").toString()))
                 .side(com.myorg.trading.broker.api.OrderSide.valueOf(side))
                 .orderType(com.myorg.trading.broker.api.OrderType.MARKET)
-                .meta(Map.of(
-                        "exchange", req.get("exchange"),
-                        "productType", req.get("productType")
-                ))
+                .meta(metaMap)
                 .build();
 
-        return ResponseEntity.ok(client.placeOrder(accountId.toString(), orderReq).block());
+        try {
+            com.myorg.trading.broker.api.BrokerOrderResponse response =
+                    client.placeOrder(accountId.toString(), orderReq).block();
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            // Return error without crashing
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("error", "exit_failed");
+            errorResponse.put("message", e.getMessage());
+            return ResponseEntity.status(500).body(errorResponse);
+        }
     }
 
     private Long getUserIdFromPrincipal(UserDetails user) {
