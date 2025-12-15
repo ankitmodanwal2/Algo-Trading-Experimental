@@ -9,33 +9,48 @@ import java.time.Instant;
 
 /**
  * Angel One SmartAPI auth response DTO.
- * Added helper fields/methods so adapters can check expiry.
+ * Updated to match actual API response structure.
  */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 public class AngelAuthResponse {
 
-    @JsonProperty("access_token")
+    /**
+     * The JWT access token (called "jwtToken" in Angel's response)
+     */
+    @JsonProperty("jwtToken")
     private String accessToken;
 
-    @JsonProperty("refresh_token")
+    /**
+     * Refresh token for extending session
+     */
+    @JsonProperty("refreshToken")
     private String refreshToken;
 
     /**
-     * seconds until expiry (from broker response)
+     * Feed token for WebSocket connections
      */
-    @JsonProperty("expires_in")
-    private Long expiresIn;
+    @JsonProperty("feedToken")
+    private String sessionId;
 
+    /**
+     * Token type (typically "Bearer")
+     */
     @JsonProperty("token_type")
     private String tokenType;
 
-    @JsonProperty("session_id")
-    private String sessionId;
-
+    /**
+     * API response message
+     */
     @JsonProperty("message")
     private String message;
+
+    /**
+     * seconds until expiry (Angel sessions last till midnight IST)
+     * Default: 8 hours (28800 seconds)
+     */
+    private Long expiresIn;
 
     /**
      * When this token was obtained (set by adapter when saving the token).

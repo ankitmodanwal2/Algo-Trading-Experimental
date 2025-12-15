@@ -6,6 +6,9 @@ import reactor.core.publisher.Mono;
 import java.util.List;
 import java.util.Set;
 
+import com.myorg.trading.domain.model.OHLCV;
+import java.time.Instant;
+
 public interface BrokerClient {
 
     String getBrokerId();
@@ -72,5 +75,26 @@ public interface BrokerClient {
     }
     default Mono<Boolean> validateCredentials(String rawCredentialsJson) {
         return Mono.just(true); // Default to true if not implemented
+    }
+    /**
+     * Fetch historical candlestick data for charting.
+     *
+     * @param accountId The broker account ID
+     * @param symbol Security ID or trading symbol
+     * @param interval Candle interval (ONE_MINUTE, FIVE_MINUTE, ONE_DAY, etc.)
+     * @param from Start time (inclusive)
+     * @param to End time (inclusive)
+     * @return List of OHLCV candles
+     */
+    default Mono<List<OHLCV>> getHistoricalData(
+            String accountId,
+            String symbol,
+            String interval,
+            Instant from,
+            Instant to
+    ) {
+        return Mono.error(new UnsupportedOperationException(
+                "getHistoricalData() not implemented for broker: " + getBrokerId()
+        ));
     }
 }

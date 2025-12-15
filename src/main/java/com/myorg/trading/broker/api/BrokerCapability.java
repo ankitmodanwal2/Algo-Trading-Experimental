@@ -9,5 +9,6 @@ public enum BrokerCapability {
     INSTRUMENT_SEARCH,
     ORDER_BOOK,
     MARKET_DATA_STREAM,
-    HISTORICAL_DATA
+    HISTORICAL_DATA,
+    GET_POSITIONS
 }
